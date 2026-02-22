@@ -12,7 +12,8 @@ use std::time::Duration; // Change: use std::time::Duration
 #[derive(Debug, Clone)]
 pub struct MaxDrawdown {
     duration: Duration, // Now std::time::Duration
-    chrono_duration: chrono::Duration, // Cached for remove_old_data performance
+    #[cfg_attr(feature = "serde", serde(skip))]
+    chrono_duration: Option<chrono::Duration>, // Cached for remove_old_data performance
     window: VecDeque<(DateTime<Utc>, f64)>,
     detector: AdaptiveTimeDetector,
 }
@@ -31,7 +32,7 @@ impl MaxDrawdown {
             .map_err(|_| TaError::InvalidParameter)?;
         Ok(Self {
             duration,
-            chrono_duration,
+            chrono_duration: Some(chrono_duration),
             window: VecDeque::new(),
             detector: AdaptiveTimeDetector::new(duration),
         })
@@ -54,11 +55,13 @@ impl MaxDrawdown {
     }
 
     fn remove_old_data(&mut self, current_time: DateTime<Utc>) {
-        // Use cached chrono_duration to avoid conversion on every call
+        let chrono_duration = *self.chrono_duration.get_or_insert_with(|| {
+            chrono::Duration::from_std(self.duration).unwrap()
+        });
         while self
             .window
             .front()
-            .map_or(false, |(time, _)| *time < current_time - self.chrono_duration)
+            .map_or(false, |(time, _)| *time < current_time - chrono_duration)
         {
             self.window.pop_front();
         }
