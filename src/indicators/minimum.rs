@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone)]
 pub struct Minimum {
     duration: Duration, // Now std::time::Duration
+    chrono_duration: chrono::Duration, // Cached for remove_old_data performance
     window: VecDeque<(DateTime<Utc>, f64)>,
     min_value: f64,
     detector: AdaptiveTimeDetector,
@@ -24,12 +25,15 @@ impl Minimum {
     }
 
     pub fn new(duration: Duration) -> Result<Self> {
-        // Change: Check for zero duration (std::time::Duration can't be negative)
+        // Check for zero duration (std::time::Duration can't be negative)
         if duration.as_secs() == 0 && duration.subsec_nanos() == 0 {
             return Err(crate::errors::TaError::InvalidParameter);
         }
+        let chrono_duration = chrono::Duration::from_std(duration)
+            .map_err(|_| crate::errors::TaError::InvalidParameter)?;
         Ok(Self {
             duration,
+            chrono_duration,
             window: VecDeque::new(),
             min_value: f64::INFINITY,
             detector: AdaptiveTimeDetector::new(duration),
@@ -45,12 +49,11 @@ impl Minimum {
     }
 
     fn remove_old(&mut self, current_time: DateTime<Utc>) {
-        // Change: Convert std::time::Duration to chrono::Duration for date arithmetic
-        let chrono_duration = chrono::Duration::from_std(self.duration).unwrap();
+        // Use cached chrono_duration to avoid conversion on every call
         while self
             .window
             .front()
-            .map_or(false, |&(time, _)| time < current_time - chrono_duration)
+            .map_or(false, |&(time, _)| time < current_time - self.chrono_duration)
         {
             self.window.pop_front();
         }

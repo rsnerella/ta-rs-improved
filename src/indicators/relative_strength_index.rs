@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone)]
 pub struct RelativeStrengthIndex {
     duration: Duration, // Now std::time::Duration
+    chrono_duration: chrono::Duration, // Cached for remove_old_data performance
     up_ema_indicator: Ema,
     down_ema_indicator: Ema,
     window: VecDeque<(DateTime<Utc>, f64)>,
@@ -24,9 +25,12 @@ pub struct RelativeStrengthIndex {
 impl RelativeStrengthIndex {
     pub fn new(duration: Duration) -> Result<Self> {
         // Note: Ema::new() now also expects std::time::Duration
+        let chrono_duration = chrono::Duration::from_std(duration)
+            .map_err(|_| crate::errors::TaError::InvalidParameter)?;
         Ok(Self {
             duration,
-            up_ema_indicator: Ema::new(duration)?, // Assuming 14-period EMA
+            chrono_duration,
+            up_ema_indicator: Ema::new(duration)?,
             down_ema_indicator: Ema::new(duration)?,
             window: VecDeque::new(),
             prev_val: None,
@@ -35,12 +39,11 @@ impl RelativeStrengthIndex {
     }
 
     fn remove_old_data(&mut self, current_time: DateTime<Utc>) {
-        // Change: Convert std::time::Duration to chrono::Duration for date arithmetic
-        let chrono_duration = chrono::Duration::from_std(self.duration).unwrap();
+        // Use cached chrono_duration to avoid conversion on every call
         while self
             .window
             .front()
-            .map_or(false, |(time, _)| *time < current_time - chrono_duration)
+            .map_or(false, |(time, _)| *time < current_time - self.chrono_duration)
         {
             self.window.pop_front();
         }
