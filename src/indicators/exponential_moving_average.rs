@@ -7,15 +7,13 @@ use crate::{Next, Reset};
 use chrono::{DateTime, Utc};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
-use std::collections::VecDeque;
 
 #[doc(alias = "EMA")]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone)]
 pub struct ExponentialMovingAverage {
-    duration: Duration, // Now std::time::Duration
+    duration: Duration,
     k: f64,
-    window: VecDeque<(DateTime<Utc>, f64)>,
     current: f64,
     is_new: bool,
     detector: AdaptiveTimeDetector,
@@ -24,7 +22,6 @@ pub struct ExponentialMovingAverage {
 
 impl ExponentialMovingAverage {
     pub fn new(duration: Duration) -> Result<Self> {
-        // std::time::Duration can't be negative, so just check if it's zero
         if duration.as_secs() == 0 && duration.subsec_nanos() == 0 {
             Err(TaError::InvalidParameter)
         } else {
@@ -39,32 +36,15 @@ impl ExponentialMovingAverage {
 
             // Calculate number of periods
             let periods = duration.as_secs() as f64 / unit_seconds;
-            
+
             Ok(Self {
                 duration,
                 k: 2.0 / (periods + 1.0),
-                window: VecDeque::new(),
                 current: 0.0,
                 is_new: true,
                 detector: AdaptiveTimeDetector::new(duration),
                 last_value: 0.0,
             })
-        }
-    }
-
-    fn remove_old_data(&mut self, current_time: DateTime<Utc>) {
-        // EMA doesn't actually need to remove old data
-        // It's a running average that only depends on the current state
-        // Keeping the window for potential debugging, but not removing data
-        // This was causing issues with RSI calculations
-
-        // Original code commented out:
-        while self
-            .window
-            .front()
-            .map_or(false, |(time, _)| *time <= current_time - self.duration)
-        {
-            self.window.pop_front();
         }
     }
 }
@@ -106,7 +86,6 @@ impl Next<f64> for ExponentialMovingAverage {
 
 impl Reset for ExponentialMovingAverage {
     fn reset(&mut self) {
-        self.window.clear();
         self.current = 0.0;
         self.is_new = true;
         self.detector.reset();

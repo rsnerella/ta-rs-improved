@@ -1,6 +1,5 @@
-use std::collections::VecDeque;
 use std::fmt;
-use std::time::Duration; // Change: Use std::time::Duration
+use std::time::Duration;
 
 use crate::errors::Result;
 use crate::indicators::{AdaptiveTimeDetector, ExponentialMovingAverage as Ema};
@@ -13,37 +12,22 @@ use serde::{Deserialize, Serialize};
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone)]
 pub struct RelativeStrengthIndex {
-    duration: Duration, // Now std::time::Duration
+    duration: Duration,
     up_ema_indicator: Ema,
     down_ema_indicator: Ema,
-    window: VecDeque<(DateTime<Utc>, f64)>,
     prev_val: Option<f64>,
     detector: AdaptiveTimeDetector,
 }
 
 impl RelativeStrengthIndex {
     pub fn new(duration: Duration) -> Result<Self> {
-        // Note: Ema::new() now also expects std::time::Duration
         Ok(Self {
             duration,
-            up_ema_indicator: Ema::new(duration)?, // Assuming 14-period EMA
+            up_ema_indicator: Ema::new(duration)?,
             down_ema_indicator: Ema::new(duration)?,
-            window: VecDeque::new(),
             prev_val: None,
             detector: AdaptiveTimeDetector::new(duration),
         })
-    }
-
-    fn remove_old_data(&mut self, current_time: DateTime<Utc>) {
-        // Change: Convert std::time::Duration to chrono::Duration for date arithmetic
-        let chrono_duration = chrono::Duration::from_std(self.duration).unwrap();
-        while self
-            .window
-            .front()
-            .map_or(false, |(time, _)| *time < current_time - chrono_duration)
-        {
-            self.window.pop_front();
-        }
     }
 }
 
@@ -53,22 +37,6 @@ impl Next<f64> for RelativeStrengthIndex {
     fn next(&mut self, (timestamp, value): (DateTime<Utc>, f64)) -> Self::Output {
         // Check if we should replace the last value (same time bucket)
         let should_replace = self.detector.should_replace(timestamp);
-
-        // ALWAYS remove old data first, regardless of replace/add
-        self.remove_old_data(timestamp);
-
-        if should_replace && !self.window.is_empty() {
-            // For RSI, when replacing a value in the same time bucket,
-            // we don't change prev_val since it represents the previous period's close
-            // Just remove the last window entry to be replaced
-            self.window.pop_back();
-        } else {
-            // Update prev_val to the last complete period's value
-            // This is crucial: prev_val should be the closing value of the previous period
-            if !self.window.is_empty() {
-                self.prev_val = Some(self.window.back().unwrap().1);
-            }
-        }
 
         // Calculate gain and loss using the stable prev_val
         let (gain, loss) = if let Some(prev_val) = self.prev_val {
@@ -80,9 +48,6 @@ impl Next<f64> for RelativeStrengthIndex {
         } else {
             (0.0, 0.0)
         };
-
-        // Add to window AFTER calculating gain/loss
-        self.window.push_back((timestamp, value));
 
         // Only update prev_val for the NEXT period if this is not a replacement
         // When replacing, prev_val stays as the previous period's close
@@ -110,7 +75,6 @@ impl Next<f64> for RelativeStrengthIndex {
 
 impl Reset for RelativeStrengthIndex {
     fn reset(&mut self) {
-        self.window.clear();
         self.prev_val = None;
         self.up_ema_indicator.reset();
         self.down_ema_indicator.reset();

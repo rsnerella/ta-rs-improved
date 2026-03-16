@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use std::fmt;
-use std::time::Duration; // Change: Use std::time::Duration
+use std::time::Duration;
 
 use crate::errors::{Result, TaError};
 use crate::indicators::AdaptiveTimeDetector;
@@ -9,10 +9,14 @@ use chrono::{DateTime, Utc};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
+const MAX_WINDOW_SIZE: usize = 500;
+const KEEP_OLDEST: usize = 10;
+const KEEP_RECENT: usize = 100;
+
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone)]
 pub struct Maximum {
-    duration: Duration, // Now std::time::Duration
+    duration: Duration,
     window: VecDeque<(DateTime<Utc>, f64)>,
     detector: AdaptiveTimeDetector,
 }
@@ -43,7 +47,6 @@ impl Maximum {
     }
 
     fn remove_old_data(&mut self, current_time: DateTime<Utc>) {
-        // Change: Convert std::time::Duration to chrono::Duration for date arithmetic
         let chrono_duration = chrono::Duration::from_std(self.duration).unwrap();
         while self
             .window
@@ -52,6 +55,40 @@ impl Maximum {
         {
             self.window.pop_front();
         }
+    }
+
+    fn thin_window(&mut self) {
+        if self.window.len() <= MAX_WINDOW_SIZE {
+            return;
+        }
+
+        let len = self.window.len();
+        let middle_start = KEEP_OLDEST;
+        let middle_end = len.saturating_sub(KEEP_RECENT);
+
+        if middle_end <= middle_start {
+            return;
+        }
+
+        let mut new_window = VecDeque::with_capacity(MAX_WINDOW_SIZE);
+
+        for i in 0..middle_start.min(len) {
+            new_window.push_back(self.window[i]);
+        }
+
+        let mut keep = true;
+        for i in middle_start..middle_end {
+            if keep {
+                new_window.push_back(self.window[i]);
+            }
+            keep = !keep;
+        }
+
+        for i in middle_end..len {
+            new_window.push_back(self.window[i]);
+        }
+
+        self.window = new_window;
     }
 }
 
@@ -79,6 +116,9 @@ impl Next<f64> for Maximum {
 
         // Add the new data point
         self.window.push_back((timestamp, value));
+
+        // Thin window if it exceeds max size (sparse sampling for memory efficiency)
+        self.thin_window();
 
         // Find the maximum value in the current window
         self.find_max_value()

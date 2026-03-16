@@ -9,11 +9,15 @@ use chrono::{DateTime, Utc};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
+const MAX_WINDOW_SIZE: usize = 500;
+const KEEP_OLDEST: usize = 10;
+const KEEP_RECENT: usize = 100;
+
 #[doc(alias = "ROC")]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone)]
 pub struct RateOfChange {
-    duration: Duration,  // Now std::time::Duration
+    duration: Duration,
     window: VecDeque<(DateTime<Utc>, f64)>,
     detector: AdaptiveTimeDetector,
 }
@@ -35,9 +39,7 @@ impl RateOfChange {
         }
     }
 
-    // Add a method to remove old data points outside the duration
     fn remove_old_data(&mut self, current_time: DateTime<Utc>) {
-        // Convert std::time::Duration to chrono::Duration for the subtraction
         let chrono_duration = chrono::Duration::from_std(self.duration).unwrap();
         while self
             .window
@@ -46,6 +48,45 @@ impl RateOfChange {
         {
             self.window.pop_front();
         }
+    }
+
+    fn thin_window(&mut self) {
+        if self.window.len() <= MAX_WINDOW_SIZE {
+            return;
+        }
+
+        // Keep oldest KEEP_OLDEST entries, thin middle, keep newest KEEP_RECENT entries
+        let len = self.window.len();
+        let middle_start = KEEP_OLDEST;
+        let middle_end = len.saturating_sub(KEEP_RECENT);
+
+        if middle_end <= middle_start {
+            return;
+        }
+
+        // Remove every other entry from the middle section
+        let mut new_window = VecDeque::with_capacity(MAX_WINDOW_SIZE);
+
+        // Keep oldest entries
+        for i in 0..middle_start.min(len) {
+            new_window.push_back(self.window[i]);
+        }
+
+        // Thin middle - keep every other entry
+        let mut keep = true;
+        for i in middle_start..middle_end {
+            if keep {
+                new_window.push_back(self.window[i]);
+            }
+            keep = !keep;
+        }
+
+        // Keep newest entries
+        for i in middle_end..len {
+            new_window.push_back(self.window[i]);
+        }
+
+        self.window = new_window;
     }
 }
 
@@ -66,6 +107,9 @@ impl Next<f64> for RateOfChange {
 
         // Add the new data point
         self.window.push_back((timestamp, value));
+
+        // Thin window if it exceeds max size (sparse sampling for memory efficiency)
+        self.thin_window();
 
         // Calculate the rate of change if we have at least two data points
         if self.window.len() > 1 {

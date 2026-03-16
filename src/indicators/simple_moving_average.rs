@@ -9,11 +9,15 @@ use chrono::{DateTime, Utc};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
+const MAX_WINDOW_SIZE: usize = 500;
+const KEEP_OLDEST: usize = 10;
+const KEEP_RECENT: usize = 100;
+
 #[doc(alias = "SMA")]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone)]
 pub struct SimpleMovingAverage {
-    duration: Duration, // Now std::time::Duration
+    duration: Duration,
     window: VecDeque<(DateTime<Utc>, f64)>,
     sum: f64,
     detector: AdaptiveTimeDetector,
@@ -41,7 +45,6 @@ impl SimpleMovingAverage {
     }
 
     fn remove_old_data(&mut self, current_time: DateTime<Utc>) {
-        // Convert std::time::Duration to chrono::Duration for the subtraction
         let chrono_duration = chrono::Duration::from_std(self.duration).unwrap();
         while self
             .window
@@ -52,6 +55,51 @@ impl SimpleMovingAverage {
                 self.sum -= value;
             }
         }
+    }
+
+    fn thin_window(&mut self) {
+        if self.window.len() <= MAX_WINDOW_SIZE {
+            return;
+        }
+
+        let len = self.window.len();
+        let middle_start = KEEP_OLDEST;
+        let middle_end = len.saturating_sub(KEEP_RECENT);
+
+        if middle_end <= middle_start {
+            return;
+        }
+
+        let mut new_window = VecDeque::with_capacity(MAX_WINDOW_SIZE);
+        let mut new_sum = 0.0;
+
+        // Keep oldest entries
+        for i in 0..middle_start.min(len) {
+            let entry = self.window[i];
+            new_sum += entry.1;
+            new_window.push_back(entry);
+        }
+
+        // Thin middle - keep every other entry
+        let mut keep = true;
+        for i in middle_start..middle_end {
+            if keep {
+                let entry = self.window[i];
+                new_sum += entry.1;
+                new_window.push_back(entry);
+            }
+            keep = !keep;
+        }
+
+        // Keep newest entries
+        for i in middle_end..len {
+            let entry = self.window[i];
+            new_sum += entry.1;
+            new_window.push_back(entry);
+        }
+
+        self.window = new_window;
+        self.sum = new_sum;
     }
 }
 
@@ -75,6 +123,9 @@ impl Next<f64> for SimpleMovingAverage {
         // Add new data point
         self.window.push_back((timestamp, value));
         self.sum += value;
+
+        // Thin window if it exceeds max size (sparse sampling for memory efficiency)
+        self.thin_window();
 
         // Calculate moving average
         if self.window.is_empty() {
